@@ -9,7 +9,7 @@ cwd = os.getcwd()
 API = 'https://api.steampowered.com/IDOTA2Match_570/GetMatchHistoryBySequenceNum/v1'
 seq = '7194292047'
 
-with open(cwd+'\\heroes.json', 'r') as file:
+with open(cwd+'//heroes.json', 'r') as file:
     heroes = json.load(file)
 
 #convert hero number to name
@@ -34,61 +34,90 @@ class Match:
     #Args: individual match item from JSON
     #Returns 2 lists, {picks, bans}
     #Double picks (bans) are hidden within hero picks
+    #Randoms do not show up in picks and happen only in R1,R2,D1,D2
     def read_draft(self,match):
         r_i = 1
         d_i = 1
         b_i = 1
 
-        heroes = {}
+        drafted = []
+        #List of heroes from draft
+        for pick in match["picks_bans"]:
+            drafted.append(pick['hero_id'])
+
         #List of heroes in the game
+        picked = []
         players = match["players"]
-        for player in players:
-            # heroes.append(player['hero_id'])
-            heroes[player['hero_id']] = player['team_number']
-
-        print(heroes)
-
-        #There can be up to 4 randomed heroes
-        #Find the heroes that were randomed, and put them in first phase
         randoms = 0
-        for x in range(6,10):
-            if(match["picks_bans"][x]['is_pick'] == False): randoms = 10-x
-
-        #Find each random and add it to picks
-        for x in range(randoms):
-            for hero,side in heroes.items():
-                try:
-                    for pick in match["picks_bans"]:
-                        if(pick['hero_id'] == hero):
-                            raise StopIteration
-                    if(side == 0):
-                        key = 'R'+str(r_i)
-                        r_i += 1
-                    else:
-                        key = 'D'+str(d_i)
-                        d_i += 1
-                    self.picks[key] = str(hero) 
-                except StopIteration:
-                    continue
-                
-
-        draft = match["picks_bans"]
-        self.match_id = match['match_id']
-        for i in draft:
-            if(i["is_pick"] == False or i['hero_id'] not in heroes.keys()):
-                key = 'B'+str(b_i)
-                b_i += 1
-                # name = get_name(heroes, i['hero_id'])
-                self.bans[key] = i['hero_id']           
-            else:
-                if(i['team'] == 0):
+        #Find the randomed heroes and record them
+        for player in players:
+            picked.append(player['hero_id'])
+            #Found a random
+            randoms += 1 
+            if(player['hero_id'] not in drafted):
+                if(player['team_number'] == 0):
                     key = 'R'+str(r_i)
                     r_i += 1
                 else:
                     key = 'D'+str(d_i)
                     d_i += 1
-                # name = get_name(heroes, i['hero_id'])
-                self.picks[key] = str(i['hero_id'])
+                self.picks[key] = str(player['hero_id'])
+
+        
+
+        # heroes = {}
+        # #Dict of heroes in the game
+        # players = match["players"]
+        # for player in players:
+        #     # heroes.append(player['hero_id'])
+        #     heroes[player['hero_id']] = player['team_number']
+
+        
+
+        # print(heroes)
+
+        #There can be up to 4 randomed heroes
+        #Find the heroes that were randomed, and put them in first phase
+        # randoms = 0
+        # draftlen = len(match["picks_bans"])
+        # draftlen = min(draftlen, 10)
+        # for x in range(6,draftlen+1):
+        #     if(match["picks_bans"][x]['is_pick'] == False): randoms = 10-x
+
+        #Find each random and add it to picks
+        # for x in range(randoms):
+        #     for hero,side in heroes.items():
+        #         try:
+        #             for pick in match["picks_bans"]:
+        #                 if(pick['hero_id'] == hero):
+        #                     raise StopIteration
+        #             if(side == 0):
+        #                 key = 'R'+str(r_i)
+        #                 r_i += 1
+        #             else:
+        #                 key = 'D'+str(d_i)
+        #                 d_i += 1
+        #             self.picks[key] = str(hero) 
+        #         except StopIteration:
+        #             continue
+                
+        
+        #Find the remaining picks and bans
+        draft = match["picks_bans"]
+        self.match_id = match['match_id']
+        for pick in draft:
+            if(pick["is_pick"] == False or pick['hero_id'] not in picked):
+                key = 'B'+str(b_i)
+                b_i += 1
+                self.bans[key] = pick['hero_id']        
+            else:
+                if(pick['team'] == 0):
+                    key = 'R'+str(r_i)
+                    r_i += 1
+                else:
+                    key = 'D'+str(d_i)
+                    d_i += 1
+                self.picks[key] = str(pick['hero_id'])
 
     def print(self):
         print('Match ID =',self.match_id, 'Winner =',self.winner)
@@ -96,7 +125,7 @@ class Match:
         print(self.bans)
 
     #From a match, generate a 10 row features matrix, and 10 row label array
-    def match_feature(self):
+    def features(self):
         #The heroes after 115 do not follow in order
         #Create a mask to correctly map hid to index in feature array
         mask = {}
@@ -200,23 +229,27 @@ def parse_matches(matches):
     return Matches
 
 
-#Args: Dota 2 Seq ID, write
+#Args: Dota 2 Seq ID, readwrite
+#readwrite=0 means read from json, readwrite=1 means call API and write it to file
 #Pulls next x matches in sequence from Dota API
 #Optionally saves the API result JSON to file
 #Returns: List of Matches, last match in sequence to start next one
-def fetch_matches(seq, write):
-    #Request 100 but API only returns 98?
-    option = {'key':STEAM_API_KEY,'start_at_match_seq_num':seq,'matches_requested':100}
-    r = requests.get(API,params=option)
-    if(r.status_code != 200): 
-        print("API Returned code ",r.status_code)
-        quit()
+def fetch_matches(seq, readwrite):
+    if(readwrite):
+        #Request 100 but API only returns 98?
+        option = {'key':STEAM_API_KEY,'start_at_match_seq_num':seq,'matches_requested':100}
+        r = requests.get(API,params=option)
+        if(r.status_code != 200): 
+            print("API Returned code ",r.status_code)
+            quit()
+        rjson = r.json()
 
-    rjson = r.json()
-
-    if(write):
         with open(cwd+'\\matches\\'+seq+'.json','w') as file:
             json.dump(rjson, file)
+
+    else:
+        with open(cwd+'//matches//'+seq+'.json','r') as file:
+            rjson = json.load(file)
 
     # with open('valveDump.json','w') as f:
     #     json.dump(r.json(),f)
@@ -231,7 +264,7 @@ def fetch_matches(seq, write):
 
 # print(len(heroes))
 
-total = 0
+total = 1000
 
 data = np.zeros((0,510),bool)
 label = np.zeros((0,1),bool)
@@ -250,17 +283,34 @@ while(total < 1000):
     #Generate feature matrix from each match
     for match in matches:
         match.print()
-        X,Y = match.match_feature()
+        X,Y = match.features()
         data = np.vstack((data,X))
         label = np.vstack((label,Y))
 
-train_data = lgb.Dataset(data,label)
-# num_round = 10
-params = {
-    'objective': 'binary',
-    'metric': 'binary_logloss',
-    'learning_rate': 0.05,
-    'num_leaves': 64,
-}
-bst = lgb.train(params,train_data)
-bst.save_model('model.txt')
+matches, next = fetch_matches(seq,0)
+for match in matches:
+    # match.print()
+    X,Y = match.features()
+    names = np.empty((1,510),str)
+    for i in range(126):
+        #fill names
+        pass
+    data = np.vstack((data,names))
+    data = np.vstack((data,X))
+    label = np.vstack((label,Y))
+
+#Print data to csv
+np.savetxt('data.csv',data,'%d',delimiter=",")
+np.savetxt('label.csv',label,'%d',delimiter=",")
+
+
+# train_data = lgb.Dataset(data,label)
+# # num_round = 10
+# params = {
+#     'objective': 'binary',
+#     'metric': 'binary_logloss',
+#     'learning_rate': 0.05,
+#     'num_leaves': 64,
+# }
+# bst = lgb.train(params,train_data)
+# bst.save_model('model.txt')
